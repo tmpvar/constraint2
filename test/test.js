@@ -29,6 +29,20 @@ function ConstraintNode() {
     }
     return dof;
   };
+
+  var lastChanged = null;
+  this.lastChanged = function(vec) {
+    if (typeof vec !== 'undefined') {
+      lastChanged = vec;
+    }
+    return lastChanged;
+  };
+
+  this.trackLastChanged = function(array) {
+    for (var i = 0; i<array.length; i++) {
+      array[i].change(this.lastChanged);
+    }
+  };
 }
 
 function FixedConstraint(vec) {
@@ -80,6 +94,8 @@ function AngleConstraint(a, b, common) {
 
   ConstraintNode.call(this);
 
+  this.trackLastChanged([a, b, common]);
+
   ConstraintNode.call(a);
   ConstraintNode.call(b);
   ConstraintNode.call(common);
@@ -125,18 +141,20 @@ var satisfy = function(constraints) {
           var ddof = adof - constraint.b.collectDof();
 
           if (adof <= 0 && ddof <= 0) {
-            console.log('here');
             return false;
           }
-          // TODO: choose a side based on the last moved vec
-
-          var diffb = constraint.b.subtract(constraint.common, true);
-          var diffa = constraint.a.subtract(constraint.common, true);
 
           // TODO: this could go bad really easily.
           if (Math.abs(current) - Math.abs(orig) !== 0) {
-            console.log('here', current, orig)
-            constraint.b.set(diffb.rotate(orig));//.add(constraint.b));
+            var diffb = constraint.b.subtract(constraint.common, true);
+            var diffa = constraint.a.subtract(constraint.common, true);
+
+            var last = constraint.lastChanged();
+            if (last === constraint.a) {
+              constraint.b.set(diffb.rotate(orig).add(constraint.common));
+            } else {
+              constraint.a.set(diffa.rotate(-orig).add(constraint.common));
+            }
           }
           return true;
 
@@ -144,23 +162,6 @@ var satisfy = function(constraints) {
           return true;
         }
 
-        // var d1 = constraint[1].subtract(constraint[3], true);
-        // var d2 = constraint[2].subtract(constraint[3], true);
-        // var angle = d1.angleTo(d2);
-        // var targetAngle = constraint[4];
-        // // TODO: apply forward the change
-
-        // if (angle !== targetAngle) {
-        //   var da = angle-targetAngle;
-
-        //   // TODO: apply angular rotation to the opposite side
-        //   //       of the moved point
-        //   //
-        //   //       right now we just use an arbitrary point, but
-        //   //       that will have to change
-        //   var rotated = d1.rotate(da).add(constraint[3]);
-        //   constraint[1].set(rotated);
-        // }
       break;
 
       case 'distance':
@@ -364,7 +365,16 @@ describe('angles', function() {
 
     eq(line1.join(';'), '(0, 0);(0, 20)');
     eq(line2.join(';'), '(0, 0);(-20, 0)');
+
+    // now rotate it back using the other endpoint
+    line2[1].set(0, 20);
+    constraints[0].update();
+    satisfy(constraints);
+
+    eq(line1.join(';'), '(0, 0);(20, 0)');
+    eq(line2.join(';'), '(0, 0);(0, 20)');
   });
+
 /*
   it('moves entire assembly when not fixed', function() {
     var shared = Vec2(0, 0);
