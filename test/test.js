@@ -11,12 +11,24 @@ function Edge(start, end) {
   this.end = end;
 }
 
+var nodeId = 0;
 function ConstraintNode() {
   var edges = this.edges = [];
+
+  this.id = nodeId++;
 
   this.link = function(node) {
     edges.push(new Edge(this, node));
     node.edges.push(new Edge(node, this));
+  };
+
+  this.collectLocalDof = function() {
+    var dof = this.dof || 0;
+    for (var i = 0; i<edges.length; i++) {
+      dof += 3;
+      dof += edges[i].end.dof || 0;
+    }
+    return dof;
   };
 
   this.collectDof = function(last) {
@@ -30,10 +42,11 @@ function ConstraintNode() {
     return dof;
   };
 
-  var lastChanged = null;
-  this.lastChanged = function(vec) {
+  var lastChanged = {};
+  this.lastChanged = function(vec, prev) {
     if (typeof vec !== 'undefined') {
-      lastChanged = vec;
+      lastChanged.current = vec;
+      lastChanged.previous = prev;
     }
     return lastChanged;
   };
@@ -49,8 +62,11 @@ function FixedConstraint(vec) {
   this.vec = vec;
   this.orig = vec.clone();
   this.name = 'fixed';
-  this.dof = -2;
+  this.dof = -3;
   ConstraintNode.call(this);
+  ConstraintNode.call(vec);
+
+  this.link(vec);
 }
 
 // point is optional
@@ -131,29 +147,57 @@ var satisfy = function(constraints) {
     var constraint = constraints[i];
     switch (constraint.name) {
       case 'angle':
-          var current = constraint.getAngle();
+        var current = constraint.getAngle();
         var orig = constraint.orig;
         if (!constraint.valid()) {
           var current = constraint.getAngle();
           var orig = constraint.orig;
 
-          var adof = constraint.a.collectDof()
-          var ddof = adof - constraint.b.collectDof();
+          var adof = constraint.a.collectLocalDof()
+          var ddof = adof - constraint.b.collectLocalDof();
+          var cdof = constraint.common.collectLocalDof();
 
           if (adof <= 0 && ddof <= 0) {
             return false;
           }
 
-          // TODO: this could go bad really easily.
-          if (Math.abs(current) - Math.abs(orig) !== 0) {
-            var diffb = constraint.b.subtract(constraint.common, true);
-            var diffa = constraint.a.subtract(constraint.common, true);
+          // common point is not fixed, translate connected nodes with dof >= 2
+          var changed = constraint.lastChanged();
+          if (cdof > 0) {
+            var d = changed.current.subtract(changed.previous, true);
 
-            var last = constraint.lastChanged();
-            if (last === constraint.a) {
-              constraint.b.set(diffb.rotate(orig).add(constraint.common));
-            } else {
-              constraint.a.set(diffa.rotate(-orig).add(constraint.common));
+            var apply = function(node, from) {
+              var seen = {};
+
+              seen[node.id] = true;
+
+              node.edges.filter(function(edge) {
+                return edge.end.collectLocalDof() >= 2 && edge.end !== changed.current;
+              }).map(function(edge) {
+                if (!seen[edge.end.id]) {
+                  seen[edge.end.id] = true;
+                  edge.end.add(d);
+                } else {
+                  console.log('dup', node)
+                }
+              });
+            }
+
+            apply(constraint);
+
+          // common point is fixed, use it as a pivot
+          } else {
+            // TODO: this could go bad really easily.
+            //       Use previous value
+            if (Math.abs(current) - Math.abs(orig) !== 0) {
+              var diffb = constraint.b.subtract(constraint.common, true);
+              var diffa = constraint.a.subtract(constraint.common, true);
+
+              if (changed.current === constraint.a) {
+                constraint.b.set(diffb.rotate(orig).add(constraint.common));
+              } else {
+                constraint.a.set(diffa.rotate(-orig).add(constraint.common));
+              }
             }
           }
           return true;
@@ -375,21 +419,22 @@ describe('angles', function() {
     eq(line2.join(';'), '(0, 0);(0, 20)');
   });
 
-/*
   it('moves entire assembly when not fixed', function() {
     var shared = Vec2(0, 0);
     var line1 = [shared, Vec2(10, 0)];
     var line2 = [shared, Vec2(0, 20)];
 
     var constraints = [
-      ['angle', line1[1], line2[1], line1[0], Math.PI/2],
+      new AngleConstraint(line1[1], line2[1], line1[0]),
     ];
 
-    line2[1].set(-20, 0);
-
+    line2[1].set(-20, 20);
+    constraints[0].update();
     satisfy(constraints);
 
-    eq(line1.join(';'), '(0, 0);(-10, -20)');
-    eq(line2.join(';'), '(0, 0);(-20, 0)');
-  });*/
+    eq(shared.toString(), '(-20, 0)')
+    eq(line1[1].toString(), '(-10, 0)')
+    eq(line2[1].toString(), '(-20, 20)')
+
+  });
 });
