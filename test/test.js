@@ -13,6 +13,8 @@ function Edge(start, end) {
 
 var nodeId = 0;
 function ConstraintNode() {
+  // TODO: this should only be called once on a node..
+
   var edges = this.edges = [];
 
   this.id = nodeId++;
@@ -44,6 +46,7 @@ function ConstraintNode() {
 
   var lastChanged = {};
   this.lastChanged = function(vec, prev) {
+    console.log('changed!', vec, prev);
     if (typeof vec !== 'undefined') {
       lastChanged.current = vec;
       lastChanged.previous = prev;
@@ -53,6 +56,9 @@ function ConstraintNode() {
 
   this.trackLastChanged = function(array) {
     for (var i = 0; i<array.length; i++) {
+      array[i].change(function() {
+        console.log('raw change..');
+      })
       array[i].change(this.lastChanged);
     }
   };
@@ -141,6 +147,35 @@ AngleConstraint.prototype.valid = function(a, b, common) {
   return this.getAngle() === this.orig;
 };
 
+function HorizontalConstraint(vec) {
+  ConstraintNode.call(this);
+
+  this.trackLastChanged([vec]);
+
+  this.orig = vec.y;
+  this.vec = vec;
+  this.dof = -1;
+  this.name = 'horizontal';
+
+  ConstraintNode.call(vec);
+
+  this.link(vec);
+
+
+}
+
+HorizontalConstraint.prototype.y = function(y) {
+  if (typeof y !== 'undefined') {
+    this.orig = y;
+  }
+
+  return this.orig;
+};
+
+HorizontalConstraint.prototype.valid = function(vec) {
+  vec = vec || this.vec;
+  return vec.y === this.y();
+};
 
 var satisfy = function(constraints) {
   for (var i=0; i<constraints.length; i++) {
@@ -261,6 +296,43 @@ var satisfy = function(constraints) {
           return false;
         }
       break;
+
+      case 'horizontal':
+        var changed = constraint.lastChanged();
+
+        if (!constraint.valid()) {
+          constraint.vec.set(constraint.vec.x, constraint.y());
+        } else {
+          var changed = constraint.lastChanged();
+
+          var apply = function(node, from) {
+            var seen = {};
+
+            seen[node.id] = true;
+
+            node.edges.filter(function(edge) {
+              return edge.end.collectLocalDof() >= 2 && edge.end !== changed.current;
+            }).map(function(edge) {
+              if (!seen[edge.end.id]) {
+                seen[edge.end.id] = true;
+                console.log(edge.end.toString(), '+', d);
+                edge.end.add(Vec2(d, 0));
+              } else {
+                console.log('dup', node)
+              }
+            });
+          };
+
+          if (changed.current) {
+            apply(constraint);
+          }
+        }
+
+      break;
+
+      default:
+        console.warn('UNHANDLED CONSTRAINT:', constraint.name);
+      break;
     }
   }
 };
@@ -354,7 +426,7 @@ describe('distance', function() {
 
   // TODO: A        B          C
   //       o--------o----------o
-  //       |________|__________| -  both lines are fixed
+  //       |________|           -  both lines are fixed
   //
   //  Test 1: Move B along the line
   //  Test 2: Move B perpendicular to the line
@@ -404,7 +476,6 @@ describe('angles', function() {
 
     line1[1].set(0, 20);
 
-    constraints[0].update();
     satisfy(constraints);
 
     eq(line1.join(';'), '(0, 0);(0, 20)');
@@ -436,5 +507,20 @@ describe('angles', function() {
     eq(line1[1].toString(), '(-10, 0)')
     eq(line2[1].toString(), '(-20, 20)')
 
+  });
+});
+
+describe('horizontal', function() {
+  it('clamps movement of a single point', function() {
+    var v = Vec2(0, 0);
+
+    var constraints = [
+      new HorizontalConstraint(v)
+    ];
+
+    v.set(10, 10);
+    satisfy(constraints);
+
+    eq(v.toString(), '(10, 0)');
   });
 });
